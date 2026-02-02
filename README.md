@@ -16,7 +16,6 @@ uv pip install sane-gesis
 Or install from source:
 
 ```bash
-cd sane.gesis.python
 uv venv 
 source .venv/bin/activate
 uv pip install -e .
@@ -41,7 +40,7 @@ sane-gesis plan . --write-requirements
 
 ```bash
 # Download packages for Windows
-sane-gesis build -r requirements.txt --platform win_amd64 --python-version 3.11
+sane-gesis build -r requirements.txt --platform win_amd64 --python-version 3.8
 
 # Download for Linux
 sane-gesis build -r requirements.txt --platform manylinux2014_x86_64
@@ -63,7 +62,7 @@ sane-gesis export-script
 unzip portable_repo.zip -d wheels/
 
 # Install packages
-uv pip install --no-index --find-links=wheels/ -r requirements.txt
+pip install --no-index --find-links=wheels/ -r requirements.txt
 
 # Or use the generated script
 bash install_offline.sh

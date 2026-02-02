@@ -13,6 +13,9 @@ authors = [
     { name = "Johannes Gruber" }
 ]
 keywords = ["offline", "portable", "packages", "repository", "pip"]
+dependencies = [
+    "pip",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
