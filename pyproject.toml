@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sane-gesis"
+version = "0.1.0"
+description = "Build portable Python package repositories for offline installation"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    { name = "Johannes Gruber" }
+]
+keywords = ["offline", "portable", "packages", "repository", "pip"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Build Tools",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[project.scripts]
+sane-gesis = "sane_gesis.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/JBGruber/sane.gesis"
+Repository = "https://github.com/JBGruber/sane.gesis"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sane_gesis"]
