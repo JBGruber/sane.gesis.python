@@ -370,6 +370,10 @@ def build_portable_repo(
     download_dir = Path("portable_repo_temp")
     download_dir.mkdir(exist_ok=True)
 
+    # Derive ABI tag from Python version so pip can find C extension wheels.
+    # e.g. "3.8" -> "cp38", "3.11" -> "cp311"
+    abi_tag = "cp" + python_version.replace(".", "")
+
     if verbose:
         print(f"Downloading {len(pkgs)} packages for {platform} / Python {python_version}...")
 
@@ -379,6 +383,8 @@ def build_portable_repo(
         "--dest", str(download_dir),
         "--platform", platform,
         "--python-version", python_version,
+        "--implementation", "cp",
+        "--abi", abi_tag,
         "--only-binary=:all:",
     ]
 
@@ -416,6 +422,8 @@ def build_portable_repo(
                     "--dest", str(download_dir),
                     "--platform", platform,
                     "--python-version", python_version,
+                    "--implementation", "cp",
+                    "--abi", abi_tag,
                     "--only-binary=:all:",
                 ]
                 if not include_deps:
@@ -471,6 +479,8 @@ def build_portable_repo(
                 "--dest", str(download_dir),
                 "--platform", platform,
                 "--python-version", python_version,
+                "--implementation", "cp",
+                "--abi", abi_tag,
                 "--only-binary=:all:",
                 "--no-deps",
             ]
