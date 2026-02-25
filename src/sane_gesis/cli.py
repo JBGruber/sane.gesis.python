@@ -96,6 +96,11 @@ def create_parser() -> argparse.ArgumentParser:
         help="Don't include dependencies",
     )
     build_parser.add_argument(
+        "--all-extras",
+        action="store_true",
+        help="Also download optional extras for each package (appends [all] to package specs)",
+    )
+    build_parser.add_argument(
         "-q", "--quiet",
         action="store_true",
         help="Suppress progress messages",
@@ -178,6 +183,7 @@ def cmd_build(args: argparse.Namespace) -> int:
         python_version=args.python_version,
         out_file=args.output,
         include_deps=not args.no_deps,
+        include_extras=args.all_extras,
         verbose=not args.quiet,
     )
 

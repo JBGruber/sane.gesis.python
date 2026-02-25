@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 import subprocess
 import sys
 import zipfile
@@ -127,6 +128,103 @@ def extract_imports_from_notebook(nb_file: Path) -> set[str]:
     return imports
 
 
+def _get_wheel_requires_python(whl_path: Path) -> str | None:
+    """Extract the Requires-Python field from a wheel's METADATA."""
+    try:
+        with zipfile.ZipFile(whl_path) as zf:
+            metadata_names = [n for n in zf.namelist() if n.endswith(".dist-info/METADATA")]
+            if not metadata_names:
+                return None
+            metadata = zf.read(metadata_names[0]).decode("utf-8", errors="replace")
+            for line in metadata.splitlines():
+                if line.lower().startswith("requires-python:"):
+                    return line.split(":", 1)[1].strip()
+    except Exception:
+        pass
+    return None
+
+
+def _is_python_version_compatible(requires_python: str, python_version: str) -> bool:
+    """Return True if python_version satisfies the Requires-Python specifier."""
+    try:
+        from packaging.specifiers import SpecifierSet
+        from packaging.version import Version
+        return Version(python_version) in SpecifierSet(requires_python)
+    except ImportError:
+        pass
+    # Fallback: manual tuple comparison
+    def _ver(s: str) -> tuple[int, ...]:
+        return tuple(int(x) for x in s.split(".")[:3])
+
+    target = _ver(python_version)
+    for spec in requires_python.split(","):
+        spec = spec.strip()
+        m = re.match(r"([><=!~]+)\s*(\d[\d.]*)", spec)
+        if not m:
+            continue
+        op, ver_str = m.group(1), m.group(2)
+        req = _ver(ver_str)
+        n = max(len(target), len(req))
+        t = target + (0,) * (n - len(target))
+        r = req + (0,) * (n - len(req))
+        if op == ">=" and not t >= r:
+            return False
+        elif op == ">" and not t > r:
+            return False
+        elif op == "<=" and not t <= r:
+            return False
+        elif op == "<" and not t < r:
+            return False
+        elif op == "==" and not t == r:
+            return False
+        elif op == "!=" and t == r:
+            return False
+        elif op == "~=" and not (t >= r and t[0] == r[0]):
+            return False
+    return True
+
+
+def _find_latest_compatible_version(package_name: str, python_version: str) -> str | None:
+    """Query PyPI to find the latest release of package compatible with python_version.
+
+    Returns a version string (e.g. "0.10.4") or None if nothing suitable is found.
+    """
+    import urllib.request
+
+    name = re.split(r"[><=!~\[]", package_name)[0].strip()
+    url = f"https://pypi.org/pypi/{name}/json"
+    try:
+        with urllib.request.urlopen(url, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+
+    releases = data.get("releases", {})
+
+    try:
+        from packaging.version import Version
+
+        def _ver_key(v: str) -> "Version":
+            try:
+                return Version(v)
+            except Exception:
+                return Version("0")
+
+        sorted_versions = sorted(releases.keys(), key=_ver_key, reverse=True)
+    except ImportError:
+        sorted_versions = sorted(releases.keys(), reverse=True)
+
+    for ver_str in sorted_versions:
+        files = releases[ver_str]
+        if not files:
+            continue
+        req_python = next((f["requires_python"] for f in files if f.get("requires_python")), None)
+        if req_python is None or _is_python_version_compatible(req_python, python_version):
+            return ver_str
+
+    return None
+
+
 def filter_stdlib(modules: set[str]) -> set[str]:
     """Remove standard library modules from a set of module names."""
     return {m for m in modules if m not in STDLIB_MODULES and not m.startswith("_")}
@@ -231,6 +329,7 @@ def build_portable_repo(
     python_version: str = "3.11",
     out_file: str = "portable_repo.zip",
     include_deps: bool = True,
+    include_extras: bool = True,
     verbose: bool = True,
 ) -> str:
     """Download packages and create a portable zip repository.
@@ -253,6 +352,10 @@ def build_portable_repo(
         Output zip file path.
     include_deps
         Whether to include dependencies (default True).
+    include_extras
+        Whether to also download optional extras by appending ``[all]`` to each
+        package spec that doesn't already specify extras (default False).
+        Packages that don't define an ``[all]`` extra will still be downloaded.
     verbose
         Whether to print progress messages.
 
@@ -270,7 +373,7 @@ def build_portable_repo(
     if verbose:
         print(f"Downloading {len(pkgs)} packages for {platform} / Python {python_version}...")
 
-    # Build pip download command
+    # Try batch download first (fast path)
     cmd = [
         sys.executable, "-m", "pip", "download",
         "--dest", str(download_dir),
@@ -282,25 +385,104 @@ def build_portable_repo(
     if not include_deps:
         cmd.append("--no-deps")
 
-    cmd.extend(pkgs)
+    if include_extras:
+        download_pkgs = [f"{p}[all]" if "[" not in p else p for p in pkgs]
+    else:
+        download_pkgs = pkgs
 
-    # Run pip download
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-    )
+    cmd.extend(download_pkgs)
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+
+    failed_pkgs: list[str] = []
 
     if result.returncode != 0:
-        # Check for packages that failed
-        if verbose:
-            print("Warning: Some packages may have failed to download.")
-            print(result.stderr)
+        # Parse stderr to find which packages failed
+        # pip reports: "ERROR: No matching distribution found for <package>"
+        failed_pattern = re.compile(r"No matching distribution found for ([^\s]+)")
+        failed_pkgs = failed_pattern.findall(result.stderr)
+
+        if failed_pkgs:
+            # Retry without the failed packages
+            failed_bases = {re.split(r"[\[><=!~]", f)[0].lower() for f in failed_pkgs}
+            remaining_pkgs = [p for p in download_pkgs if re.split(r"[\[><=!~]", p)[0].lower() not in failed_bases]
+
+            if remaining_pkgs:
+                if verbose:
+                    print(f"Retrying without {len(failed_pkgs)} unavailable package(s)...")
+
+                cmd = [
+                    sys.executable, "-m", "pip", "download",
+                    "--dest", str(download_dir),
+                    "--platform", platform,
+                    "--python-version", python_version,
+                    "--only-binary=:all:",
+                ]
+                if not include_deps:
+                    cmd.append("--no-deps")
+                cmd.extend(remaining_pkgs)
+
+                subprocess.run(cmd, capture_output=True, text=True)
+
+    # Show summary of failures
+    if failed_pkgs and verbose:
+        print(f"\nWarning: {len(failed_pkgs)} package(s) could not be downloaded:")
+        for pkg in failed_pkgs:
+            print(f"  - {pkg}")
+        print("These may be misidentified imports or packages without compatible wheels.\n")
 
     # Count downloaded files
     wheel_files = list(download_dir.glob("*.whl"))
     if verbose:
-        print(f"Downloaded {len(wheel_files)} wheel files")
+        print(f"Downloaded {len(wheel_files)} wheel files ({len(pkgs) - len(failed_pkgs)} packages succeeded, {len(failed_pkgs)} failed)")
+
+    # Verify Requires-Python compatibility for each downloaded wheel
+    incompatible_wheels: list[tuple[Path, str]] = []
+    for whl in wheel_files:
+        req_python = _get_wheel_requires_python(whl)
+        if req_python and not _is_python_version_compatible(req_python, python_version):
+            incompatible_wheels.append((whl, req_python))
+
+    if incompatible_wheels:
+        if verbose:
+            print(f"\nFound {len(incompatible_wheels)} wheel(s) incompatible with Python {python_version}, searching PyPI for older compatible versions...")
+
+        retry_specs: list[str] = []
+        unresolved: list[tuple[str, str]] = []
+
+        for whl, req in incompatible_wheels:
+            pkg = whl.stem.split("-")[0].replace("_", "-").lower()
+            compat_ver = _find_latest_compatible_version(pkg, python_version)
+            whl.unlink()  # remove the incompatible wheel regardless
+            if compat_ver:
+                if verbose:
+                    print(f"  {pkg}: will use =={compat_ver} (downloaded version requires: {req})")
+                retry_specs.append(f"{pkg}=={compat_ver}")
+            else:
+                if verbose:
+                    print(f"  {pkg}: no compatible version found on PyPI (latest requires: {req})")
+                unresolved.append((pkg, req))
+
+        if retry_specs:
+            if verbose:
+                print(f"Re-downloading {len(retry_specs)} package(s) with compatible versions...")
+            retry_cmd = [
+                sys.executable, "-m", "pip", "download",
+                "--dest", str(download_dir),
+                "--platform", platform,
+                "--python-version", python_version,
+                "--only-binary=:all:",
+                "--no-deps",
+            ]
+            retry_cmd.extend(retry_specs)
+            subprocess.run(retry_cmd, capture_output=True, text=True)
+            wheel_files = list(download_dir.glob("*.whl"))
+
+        if unresolved:
+            print(f"\nWarning: No Python {python_version}-compatible version found for {len(unresolved)} package(s):")
+            for pkg, req in unresolved:
+                print(f"  - {pkg}  (latest Requires-Python: {req})")
+            print("These packages are excluded from the zip and will be missing at install time.\n")
 
     # Create zip archive
     if verbose:
