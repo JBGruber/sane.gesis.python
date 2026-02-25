@@ -473,7 +473,7 @@ def build_portable_repo(
 
         if retry_specs:
             if verbose:
-                print(f"Re-downloading {len(retry_specs)} package(s) with compatible versions...")
+                print(f"Re-downloading {len(retry_specs)} package(s) with compatible versions (including dependencies)...")
             retry_cmd = [
                 sys.executable, "-m", "pip", "download",
                 "--dest", str(download_dir),
@@ -482,17 +482,36 @@ def build_portable_repo(
                 "--implementation", "cp",
                 "--abi", abi_tag,
                 "--only-binary=:all:",
-                "--no-deps",
             ]
             retry_cmd.extend(retry_specs)
             subprocess.run(retry_cmd, capture_output=True, text=True)
             wheel_files = list(download_dir.glob("*.whl"))
 
+            # Second-pass: check that the retry didn't pull in new incompatible wheels
+            still_incompatible: list[tuple[Path, str]] = []
+            for whl in wheel_files:
+                req_python = _get_wheel_requires_python(whl)
+                if req_python and not _is_python_version_compatible(req_python, python_version):
+                    still_incompatible.append((whl, req_python))
+
+            if still_incompatible:
+                print(
+                    f"\nWarning: {len(still_incompatible)} wheel(s) are still incompatible with "
+                    f"Python {python_version} after retry and will likely cause install failures:"
+                )
+                for whl, req in still_incompatible:
+                    print(f"  - {whl.name}  (Requires-Python: {req})")
+                print()
+
         if unresolved:
-            print(f"\nWarning: No Python {python_version}-compatible version found for {len(unresolved)} package(s):")
+            print(
+                f"\nWarning: No Python {python_version}-compatible version found for "
+                f"{len(unresolved)} package(s). These are excluded from the zip and "
+                f"WILL BE MISSING at install time:"
+            )
             for pkg, req in unresolved:
                 print(f"  - {pkg}  (latest Requires-Python: {req})")
-            print("These packages are excluded from the zip and will be missing at install time.\n")
+            print()
 
     # Create zip archive
     if verbose:
