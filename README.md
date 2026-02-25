@@ -1,7 +1,7 @@
 # sane-gesis
 
 > [!WARNING]  
-> Entirly vibe-coded translation of the R version: https://github.com/JBGruber/sane.gesis/
+> Entirely vibe-coded translation of the R version: https://github.com/JBGruber/sane.gesis/
 
 Build portable Python package repositories for offline installation.
 
@@ -10,7 +10,7 @@ This tool helps users working on secure offline machines by scanning Python proj
 ## Installation
 
 ```bash
-uv pip install sane-gesis
+uv pip install git+https://github.com/JBGruber/sane.gesis.python.git
 ```
 
 Or install from source:
