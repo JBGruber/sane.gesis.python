@@ -225,6 +225,82 @@ def _find_latest_compatible_version(package_name: str, python_version: str) -> s
     return None
 
 
+def _platform_to_sys_platform(platform: str) -> str:
+    """Map a pip platform tag to the sys.platform value used in environment markers."""
+    if platform.startswith("win"):
+        return "win32"
+    if "linux" in platform:
+        return "linux"
+    if "macosx" in platform or "darwin" in platform:
+        return "darwin"
+    return "linux"
+
+
+def _eval_marker(marker_str: str, python_version: str, sys_platform: str) -> bool:
+    """Evaluate a PEP 508 environment marker for a specific target python_version/platform.
+
+    pip download --python-version X does NOT evaluate python_version markers against X;
+    it uses the running interpreter's version. This function fills that gap.
+    """
+    ver_parts = python_version.split(".")
+    py_ver = ".".join(ver_parts[:2])
+    env = {
+        "python_version": py_ver,
+        "python_full_version": python_version if len(ver_parts) >= 3 else python_version + ".0",
+        "implementation_name": "cpython",
+        "implementation_version": python_version if len(ver_parts) >= 3 else python_version + ".0",
+        "platform_python_implementation": "CPython",
+        "sys_platform": sys_platform,
+        "os_name": "nt" if sys_platform == "win32" else "posix",
+        "platform_machine": "AMD64" if sys_platform == "win32" else "x86_64",
+        "platform_system": (
+            "Windows" if sys_platform == "win32"
+            else ("Darwin" if sys_platform == "darwin" else "Linux")
+        ),
+        "extra": "",
+    }
+    try:
+        from packaging.markers import Marker
+        return Marker(marker_str).evaluate(env)
+    except Exception:
+        pass
+    # Fallback: handle the common python_version comparison case
+    m = re.search(r'python_version\s*([<>=!]+)\s*["\']?([\d.]+)["\']?', marker_str)
+    if m:
+        op, ver = m.group(1), m.group(2)
+        return _is_python_version_compatible(f"{op}{ver}", python_version)
+    return True  # conservative: assume required if marker can't be parsed
+
+
+def _get_marker_required_deps(whl_path: Path, python_version: str, sys_platform: str) -> list[str]:
+    """Return package names from Requires-Dist that are conditionally required.
+
+    Only returns deps whose environment marker evaluates to True for the given
+    python_version and sys_platform. Unconditional deps (no marker) are skipped
+    because pip already handles those correctly.
+    """
+    deps: list[str] = []
+    try:
+        with zipfile.ZipFile(whl_path) as zf:
+            metadata_names = [n for n in zf.namelist() if n.endswith(".dist-info/METADATA")]
+            if not metadata_names:
+                return []
+            metadata = zf.read(metadata_names[0]).decode("utf-8", errors="replace")
+            for line in metadata.splitlines():
+                if not line.lower().startswith("requires-dist:"):
+                    continue
+                req_str = line.split(":", 1)[1].strip()
+                if ";" not in req_str:
+                    continue  # unconditional — pip handles these
+                pkg_part, marker_part = req_str.split(";", 1)
+                pkg_name = re.split(r"[\s\[><=!~(]", pkg_part.strip())[0].strip()
+                if pkg_name and _eval_marker(marker_part.strip(), python_version, sys_platform):
+                    deps.append(pkg_name)
+    except Exception:
+        pass
+    return deps
+
+
 def filter_stdlib(modules: set[str]) -> set[str]:
     """Remove standard library modules from a set of module names."""
     return {m for m in modules if m not in STDLIB_MODULES and not m.startswith("_")}
@@ -512,6 +588,70 @@ def build_portable_repo(
             for pkg, req in unresolved:
                 print(f"  - {pkg}  (latest Requires-Python: {req})")
             print()
+
+    # Resolve marker-conditional dependencies that pip may have missed.
+    # `pip download --python-version X` evaluates environment markers (e.g.
+    # `python_version < "3.9"`) against the *running* Python, not the target X.
+    # We do our own pass: inspect each wheel's Requires-Dist, evaluate markers
+    # for the target version ourselves, and explicitly download anything missing.
+    sys_platform = _platform_to_sys_platform(platform)
+    attempted_marker_pkgs: set[str] = set()
+    checked_for_marker_deps: set[str] = set()
+
+    for _iteration in range(10):  # bounded to handle transitive conditional deps
+        wheel_files = list(download_dir.glob("*.whl"))
+        downloaded_names = {
+            whl.stem.split("-")[0].replace("_", "-").lower() for whl in wheel_files
+        }
+        missing_marker_deps: list[str] = []
+        for whl in wheel_files:
+            pkg_stem = whl.stem.split("-")[0].replace("_", "-").lower()
+            if pkg_stem in checked_for_marker_deps:
+                continue
+            checked_for_marker_deps.add(pkg_stem)
+            for dep in _get_marker_required_deps(whl, python_version, sys_platform):
+                dep_norm = dep.replace("_", "-").lower()
+                if dep_norm not in downloaded_names and dep_norm not in attempted_marker_pkgs:
+                    missing_marker_deps.append(dep)
+                    attempted_marker_pkgs.add(dep_norm)
+
+        if not missing_marker_deps:
+            break
+
+        if verbose:
+            print(
+                f"Downloading {len(missing_marker_deps)} marker-conditional "
+                f"dependency(ies) for Python {python_version}:"
+            )
+            for dep in missing_marker_deps:
+                print(f"  - {dep}")
+
+        marker_cmd = [
+            sys.executable, "-m", "pip", "download",
+            "--dest", str(download_dir),
+            "--platform", platform,
+            "--python-version", python_version,
+            "--implementation", "cp",
+            "--abi", abi_tag,
+            "--only-binary=:all:",
+            "--no-deps",  # their transitive deps are caught by subsequent iterations
+        ] + missing_marker_deps
+        marker_result = subprocess.run(marker_cmd, capture_output=True, text=True)
+
+        if marker_result.returncode != 0:
+            still_missing = re.compile(
+                r"No matching distribution found for ([^\s]+)"
+            ).findall(marker_result.stderr)
+            if still_missing and verbose:
+                print(
+                    f"\nWarning: Could not download {len(still_missing)} "
+                    f"marker-required package(s) — they will be missing at install time:"
+                )
+                for pkg in still_missing:
+                    print(f"  - {pkg}")
+                print()
+
+    wheel_files = list(download_dir.glob("*.whl"))
 
     # Create zip archive
     if verbose:
