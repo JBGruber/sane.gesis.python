@@ -7,10 +7,13 @@ name = "sane-gesis"
 version = "0.1.0"
 description = "Build portable Python package repositories for offline installation"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.7"
 license = "MIT"
 authors = [
-    { name = "Johannes Gruber" }
+    { name = "Johannes B. Gruber", email = "JohannesB.Gruber@gmail.com" }
+]
+maintainers = [
+    { name = "Johannes B. Gruber", email = "JohannesB.Gruber@gmail.com" }
 ]
 keywords = ["offline", "portable", "packages", "repository", "pip"]
 dependencies = [
@@ -24,6 +27,9 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -39,8 +45,9 @@ dev = [
 sane-gesis = "sane_gesis.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/JBGruber/sane.gesis"
-Repository = "https://github.com/JBGruber/sane.gesis"
+Homepage = "https://github.com/JBGruber/sane.gesis.python"
+Repository = "https://github.com/JBGruber/sane.gesis.python"
+"Author ORCID" = "https://orcid.org/0000-0001-9177-1772"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sane_gesis"]

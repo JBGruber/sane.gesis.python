@@ -14,7 +14,10 @@ import subprocess
 import sys
 import zipfile
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from typing import Literal
 
 # Common import name -> package name mappings
 # (import name on the left, pip package name on the right)
