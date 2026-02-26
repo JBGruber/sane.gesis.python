@@ -1,5 +1,7 @@
 # sane-gesis
 
+[![Tests](https://github.com/JBGruber/sane.gesis.python/actions/workflows/tests.yml/badge.svg)](https://github.com/JBGruber/sane.gesis.python/actions/workflows/tests.yml)
+
 > [!WARNING]  
 > Entirely vibe-coded translation of the R version: https://github.com/JBGruber/sane.gesis/
 
